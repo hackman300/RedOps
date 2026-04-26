@@ -1,9 +1,7 @@
 /*
  * RedOps Parsing Engine — High-Speed Log Ingestion & Pattern Extraction
  * Compile: gcc -shared -fPIC -O2 -o redops_engine.so redops_engine.c
- *
- * Parses raw output from common red team tools (nmap, crackmapexec, etc.)
- * into structured findings at native C speed.
+ * Parses raw output from common red team tools into structured findings.
  */
 
 #include <stdio.h>
@@ -20,7 +18,6 @@
 #define STR_LEN    256
 #define BIG_STR    1024
 
-/* ─── Data Structures ───────────────────────────────────────────────────────── */
 
 typedef struct {
     char ip[IP_LEN];
@@ -58,7 +55,6 @@ typedef struct {
     int          parse_errors;
 } ParseResult;
 
-/* ─── String utilities ──────────────────────────────────────────────────────── */
 
 static void str_lower(char *s) {
     for (; *s; s++) *s = (char)tolower((unsigned char)*s);
@@ -112,7 +108,6 @@ static int extract_port(const char *line, char *out) {
     return 0;
 }
 
-/* ─── Nmap XML / grepable parser ────────────────────────────────────────────── */
 
 static int parse_nmap_line(const char *raw, ParseResult *res) {
     if (res->host_count >= MAX_FINDS) return 0;
@@ -185,7 +180,6 @@ static int parse_nmap_line(const char *raw, ParseResult *res) {
     return 0;
 }
 
-/* ─── CrackMapExec (CME) parser ─────────────────────────────────────────────── */
 
 static int parse_cme_line(const char *raw, ParseResult *res) {
     char line[MAX_LINE];
@@ -244,7 +238,6 @@ static int parse_cme_line(const char *raw, ParseResult *res) {
     return 0;
 }
 
-/* ─── Generic credential pattern matcher ───────────────────────────────────── */
 
 /*
  * Matches lines containing common credential dump patterns:
