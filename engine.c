@@ -1,9 +1,3 @@
-/*
- * RedOps Parsing Engine — High-Speed Log Ingestion & Pattern Extraction
- * Compile: gcc -shared -fPIC -O2 -o redops_engine.so redops_engine.c
- * Parses raw output from common red team tools into structured findings.
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,21 +21,21 @@ typedef struct {
     char version[STR_LEN];
     char state[16];
     char os_guess[STR_LEN];
-    int  confidence;          /* 0-100 */
+    int  confidence;
 } HostFinding;
 
 typedef struct {
-    char type[32];            /* smb_signing, null_session, weak_cred, … */
+    char type[32];
     char host[IP_LEN];
     char detail[BIG_STR];
-    int  severity;            /* 0=info 1=low 2=med 3=high 4=crit */
+    int  severity;
 } VulnFinding;
 
 typedef struct {
-    char credential[STR_LEN]; /* user:pass or user:hash */
+    char credential[STR_LEN];
     char host[IP_LEN];
     char protocol[32];
-    char source[STR_LEN];     /* how it was obtained */
+    char source[STR_LEN];
 } CredFinding;
 
 typedef struct {
@@ -75,7 +69,6 @@ static int contains(const char *haystack, const char *needle) {
     return strstr(haystack, needle) != NULL;
 }
 
-/* Extract first IPv4 address from a string into out (size IP_LEN). */
 static int extract_ip(const char *line, char *out) {
     const char *p = line;
     while (*p) {
@@ -92,7 +85,6 @@ static int extract_ip(const char *line, char *out) {
     return 0;
 }
 
-/* Extract first port number from a string. */
 static int extract_port(const char *line, char *out) {
     const char *p = line;
     while (*p) {
@@ -115,7 +107,6 @@ static int parse_nmap_line(const char *raw, ParseResult *res) {
     strncpy(line, raw, MAX_LINE-1);
     str_lower(line);
 
-    /* grepable format: "Host: 10.0.0.1 (hostname)\tStatus: Up" */
     if (starts_with(line, "host:")) {
         HostFinding *h = &res->hosts[res->host_count];
         memset(h, 0, sizeof(*h));
@@ -127,9 +118,7 @@ static int parse_nmap_line(const char *raw, ParseResult *res) {
         }
     }
 
-    /* grepable: "Ports: 22/open/tcp//ssh//OpenSSH 8.2p1 Ubuntu/" */
     if (starts_with(line, "ports:")) {
-        /* parse each port entry */
         char *tok = strtok(line + 6, ",\t\n");
         while (tok) {
             tok = str_trim(tok);
@@ -153,7 +142,6 @@ static int parse_nmap_line(const char *raw, ParseResult *res) {
         return 1;
     }
 
-    /* normal output: "22/tcp   open  ssh     OpenSSH 8.2p1" */
     {
         int port, n = 0;
         char proto[16], state[16], svc[64], ver[128];
@@ -185,7 +173,6 @@ static int parse_cme_line(const char *raw, ParseResult *res) {
     char line[MAX_LINE];
     strncpy(line, raw, MAX_LINE-1);
 
-    /* Format: "SMB  10.0.0.5  445  DC01  [+] domain\user:pass (Pwn3d!)" */
     char proto[16], ip[IP_LEN], port[PORT_LEN], host[64], tag[16], rest[BIG_STR];
     memset(proto,0,sizeof(proto)); memset(ip,0,sizeof(ip));
     memset(port,0,sizeof(port));   memset(host,0,sizeof(host));
@@ -194,19 +181,16 @@ static int parse_cme_line(const char *raw, ParseResult *res) {
     if (sscanf(line, "%15s %39s %7s %63s %15s %1023[^\n]",
                proto, ip, port, host, tag, rest) >= 5) {
 
-        /* Successful auth: [+] */
         if (strcmp(tag, "[+]") == 0 && res->cred_count < MAX_FINDS) {
             CredFinding *c = &res->creds[res->cred_count];
             memset(c, 0, sizeof(*c));
             strncpy(c->host,     ip,    sizeof(c->host)-1);
             strncpy(c->protocol, proto, sizeof(c->protocol)-1);
             strncpy(c->source,   host,  sizeof(c->source)-1);
-            /* rest = "domain\user:pass ..." */
             char *cr = str_trim(rest);
             snprintf(c->credential, sizeof(c->credential)-1, "%s", cr);
             res->cred_count++;
 
-            /* If Pwn3d — also add as crit vuln */
             if (contains(rest, "(Pwn3d!)") && res->vuln_count < MAX_FINDS) {
                 VulnFinding *v = &res->vulns[res->vuln_count];
                 memset(v, 0, sizeof(*v));
@@ -220,7 +204,6 @@ static int parse_cme_line(const char *raw, ParseResult *res) {
             return 1;
         }
 
-        /* SMB signing disabled */
         if (contains(line, "signing:False") || contains(line, "signing: False")) {
             if (res->vuln_count < MAX_FINDS) {
                 VulnFinding *v = &res->vulns[res->vuln_count];
@@ -239,18 +222,12 @@ static int parse_cme_line(const char *raw, ParseResult *res) {
 }
 
 
-/*
- * Matches lines containing common credential dump patterns:
- *   user:hash, user:password, Username/Password rows, etc.
- */
 static int parse_cred_line(const char *raw, ParseResult *res) {
     if (res->cred_count >= MAX_FINDS) return 0;
     char line[MAX_LINE];
     strncpy(line, raw, MAX_LINE-1);
     char *p = str_trim(line);
 
-    /* NTLM hash pattern: 32-char hex strings after a colon */
-    /* "Administrator:500:aad3b...:1e5b..." (SAM format) */
     char user[64], rid[16], lm[64], nt[64];
     if (sscanf(p, "%63[^:]:%15[^:]:%63[^:]:%63[^: \t\n]", user, rid, lm, nt) == 4
         && strlen(nt) == 32) {
@@ -263,16 +240,10 @@ static int parse_cred_line(const char *raw, ParseResult *res) {
         return 1;
     }
 
-    /* "Username: admin" / "Password: hunter2" pairs — stateful, skip for now */
     return 0;
 }
 
-/* ─── Public API ─────────────────────────────────────────────────────────────── */
 
-/* Parse a batch of newline-delimited text.
- * Caller must allocate ParseResult and pass tool hint:
- *   0 = auto-detect, 1 = nmap, 2 = cme, 3 = cred_dump
- */
 void parse_tool_output(const char *text, size_t len,
                        ParseResult *res, int tool_hint) {
     char line[MAX_LINE];
@@ -286,7 +257,6 @@ void parse_tool_output(const char *text, size_t len,
                 char *trimmed = str_trim(line);
                 if (*trimmed && trimmed[0] != '#') {
                     int hint = tool_hint;
-                    /* auto-detect */
                     if (hint == 0) {
                         char lo[MAX_LINE];
                         strncpy(lo, trimmed, MAX_LINE-1);
@@ -318,10 +288,7 @@ void parse_tool_output(const char *text, size_t len,
     }
 }
 
-/* Serialize ParseResult to a flat JSON-like string for Python consumption.
- * Returns bytes written (excluding null terminator).
- * out_size should be large enough (suggest: 512 KB).
- */
+
 size_t serialize_result(const ParseResult *res, char *out, size_t out_size) {
     size_t pos = 0;
 
@@ -343,7 +310,6 @@ size_t serialize_result(const ParseResult *res, char *out, size_t out_size) {
     for (int i = 0; i < res->vuln_count; i++) {
         const VulnFinding *v = &res->vulns[i];
         if (i) W(",");
-        /* escape double quotes in detail */
         char esc[BIG_STR*2]; size_t ei=0;
         for (const char *d=v->detail; *d && ei<sizeof(esc)-2; d++) {
             if (*d=='"' || *d=='\\') esc[ei++]='\\';
@@ -373,7 +339,7 @@ size_t serialize_result(const ParseResult *res, char *out, size_t out_size) {
 #undef W
 }
 
-/* Convenience: parse text and return JSON directly (Python calls this). */
+
 size_t parse_and_serialize(const char *text, size_t text_len,
                            char *json_out, size_t json_size,
                            int tool_hint) {
@@ -383,7 +349,7 @@ size_t parse_and_serialize(const char *text, size_t text_len,
     return serialize_result(&res, json_out, json_size);
 }
 
-/* Quick stats: returns comma-separated "hosts,vulns,creds,lines" */
+
 void quick_stats(const char *text, size_t len, char *out, int tool_hint) {
     ParseResult res;
     memset(&res, 0, sizeof(res));
